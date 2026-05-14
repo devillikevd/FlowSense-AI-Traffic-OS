@@ -31,9 +31,7 @@
 
 | Environment | URL | Status |
 |:-----------:|:---:|:------:|
-| **Production** | [**🔗 your-deployment-url.vercel.app**](#) | ![Live](https://img.shields.io/badge/●-Live-10b981?style=flat-square) |
-| **Staging** | [🔗 staging link](#) | ![Staging](https://img.shields.io/badge/●-Staging-f59e0b?style=flat-square) |
-| **API Docs** | [🔗 /docs](#) | ![API](https://img.shields.io/badge/●-Swagger-06b6d4?style=flat-square) |
+| **Production** | [**🔗 flowsense-ten.vercel.app**](https://flowsense-ten.vercel.app) | ![Live](https://img.shields.io/badge/●-Live-10b981?style=flat-square) |
 
 > 💡 **Replace the links above** with your actual deployment URLs after deploying.
 

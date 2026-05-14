@@ -19,3 +19,4 @@ frontend/*.local
 # IDEs
 .idea/
 .DS_Store
+.vercel
