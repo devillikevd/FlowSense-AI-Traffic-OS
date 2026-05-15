@@ -1,12 +1,13 @@
 # backend/main.py
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from datetime import datetime
 import asyncio
+import json
 
 from backend.predictive_engine import TrafficEngine
-from backend.ai_capabilities import SmartCityIntelligence
+from backend.ai_capabilities import SmartCityIntelligence, ConversationalAI
 
 app = FastAPI(title="FlowSense - AI Traffic OS")
 
@@ -22,6 +23,10 @@ app.add_middleware(
 print("Initializing FlowSense predictive engine...")
 engine = TrafficEngine()
 smart = SmartCityIntelligence(engine)
+chat_ai = ConversationalAI(engine)
+
+# WebSocket manager for real-time communication
+active_connections = []
 
 LABELS = ["High", "Low", "Medium", "Very High"]
 
@@ -152,6 +157,97 @@ def anomaly(location: str):
 @app.get("/api/assistant")
 def assistant(origin: str = "Connaught Place", destination: str = "IGI Airport", user_id: str = "guest"):
     return smart.commuter_assistant(origin, destination, user_id)
+
+
+# ============ Conversational AI Chat Endpoints ============
+
+@app.post("/api/chat")
+def chat(message: str, user_id: str = "guest"):
+    """Process user message and return AI response"""
+    try:
+        response = chat_ai.process_message(message, user_id)
+        return response
+    except Exception as e:
+        return {
+            "status": "error",
+            "response": "I'm having trouble processing that. Please try again.",
+            "error": str(e)
+        }
+
+
+@app.get("/api/chat/context/{location}")
+def chat_context(location: str, user_id: str = "guest"):
+    """Get AI context and summary for a specific location"""
+    location = normalize_location(location)
+    try:
+        summary = chat_ai.generate_context_summary(location)
+        return summary
+    except Exception as e:
+        return {"error": str(e), "location": location}
+
+
+@app.get("/api/chat/health")
+def chat_health():
+    """Health check for AI assistant"""
+    return {
+        "status": "healthy",
+        "assistant_status": "online",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+
+@app.websocket("/ws/chat/{user_id}")
+async def websocket_chat(websocket: WebSocket, user_id: str):
+    """WebSocket endpoint for real-time chat communication"""
+    await websocket.accept()
+    active_connections.append(websocket)
+    
+    try:
+        while True:
+            # Receive message from client
+            data = await websocket.receive_text()
+            
+            # Process message
+            try:
+                message_data = json.loads(data)
+                user_message = message_data.get("message", "")
+                
+                # Get AI response
+                response = chat_ai.process_message(user_message, user_id)
+                
+                # Send response back to client
+                await websocket.send_json({
+                    "type": "response",
+                    "data": response
+                })
+            except json.JSONDecodeError:
+                # Handle plain text messages
+                response = chat_ai.process_message(data, user_id)
+                await websocket.send_json({
+                    "type": "response",
+                    "data": response
+                })
+            except Exception as e:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Error processing message: {str(e)}"
+                })
+    except WebSocketDisconnect:
+        active_connections.remove(websocket)
+    except Exception as e:
+        print(f"WebSocket error: {str(e)}")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+
+
+@app.get("/api/command_center")
+def command_center():
+    """Get comprehensive city command center dashboard"""
+    try:
+        return smart.city_command_center()
+    except Exception as e:
+        return {"error": str(e), "status": "error"}
 
 
 @app.get("/api/live_summary")

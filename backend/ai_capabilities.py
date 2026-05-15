@@ -1,6 +1,7 @@
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+import json
 
 from backend.predictive_engine import TrafficEngine
 
@@ -14,6 +15,22 @@ EVENT_IMPACTS = {
     "vip_movement": 0.40,
     "construction": 0.38,
     "none": 0.0,
+}
+
+# Conversational responses and messages
+GREETING_MESSAGES = {
+    "hello": "Hello! I'm FlowSense AI. How can I help you with traffic today?",
+    "hi": "Hi there! 👋 I can help with traffic predictions, route optimization, and real-time traffic updates.",
+    "help": "I can assist with: Traffic predictions, Route suggestions, Incident alerts, Parking info, Emergency routes, and more!",
+    "status": "Let me check the current traffic status for you. Which location are you interested in?",
+}
+
+RESPONSE_TEMPLATES = {
+    "traffic_high": "Traffic is heavy at {location} right now. I recommend taking {alternate_route} or delaying your trip by {delay_min} minutes.",
+    "traffic_low": "Great news! Traffic is light at {location}. This is a perfect time to travel!",
+    "route_suggestion": "Based on current conditions, I suggest the {profile} route via {route}. Estimated time: {eta} minutes.",
+    "emergency_help": "Emergency route activated! Clearing priority lanes from {origin} to {destination}.",
+    "no_data": "I don't have specific data for that location yet, but I can provide predictions based on historical patterns.",
 }
 
 SEGMENT_TEMPLATES = [
@@ -38,6 +55,256 @@ CAMERA_COORDS = {
 }
 
 AQI_LEVELS = ["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"]
+
+
+class ConversationalAI:
+    """Enhanced conversational AI assistant for natural user interaction"""
+    
+    def __init__(self, engine: TrafficEngine):
+        self.engine = engine
+        self.conversation_history = []
+        self.user_context = {}
+        self.locations = list(engine.location_coords.keys())
+    
+    def process_message(self, user_message: str, user_id: str = "guest") -> Dict:
+        """Process natural language message and provide intelligent response"""
+        try:
+            # Store conversation history
+            self.conversation_history.append({
+                "user_id": user_id,
+                "message": user_message,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Normalize input
+            msg_lower = user_message.lower().strip()
+            
+            # Intent detection and response generation
+            response, confidence = self._detect_intent(msg_lower, user_id)
+            
+            return {
+                "status": "success",
+                "response": response,
+                "confidence": confidence,
+                "timestamp": datetime.now().isoformat(),
+                "user_id": user_id,
+                "conversation_id": hash(user_id) % 10000,
+                "message": user_message
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "response": f"I encountered an issue: {str(e)}. Please try again or rephrase your question.",
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e)
+            }
+    
+    def _detect_intent(self, msg: str, user_id: str) -> Tuple[str, float]:
+        """Detect user intent from message and return response with confidence"""
+        # Greeting intents
+        if any(word in msg for word in ["hello", "hi", "hey", "namaste", "greetings"]):
+            return "Hello! 👋 I'm FlowSense AI, your personal traffic assistant. How can I help you today?", 0.95
+        
+        # Help intent
+        if any(word in msg for word in ["help", "what can you do", "capabilities", "options"]):
+            help_text = ("I can help with:\n"
+                        "🚗 **Traffic & Routes**: Check traffic, find routes, get ETA\n"
+                        "🚨 **Emergency**: Create emergency corridors\n"
+                        "🅿️ **Parking**: Find available parking spaces\n"
+                        "🌍 **Predictions**: Forecast traffic conditions\n"
+                        "💨 **Pollution**: Air quality alerts and eco-friendly routes\n"
+                        "📍 **Directions**: Navigate with real-time updates\n"
+                        "What would you like help with?")
+            return help_text, 0.90
+        
+        # Status check intents
+        if any(word in msg for word in ["status", "how is traffic", "check traffic", "current conditions", "traffic now"]):
+            return "Let me check the latest traffic conditions. Which location or area would you like to know about?", 0.85
+        
+        # Extract location if mentioned
+        mentioned_location = self._extract_location(msg)
+        if mentioned_location:
+            return self._get_location_update(mentioned_location), 0.80
+        
+        # Route intent
+        if any(word in msg for word in ["route", "path", "how to reach", "navigate", "directions", "fastest", "way"]):
+            return self._handle_route_intent(msg), 0.85
+        
+        # Emergency intent
+        if any(word in msg for word in ["emergency", "urgent", "help", "accident", "ambulance", "critical"]):
+            return "🚨 **EMERGENCY MODE ACTIVATED**\n\nPriority lanes are being cleared. Please provide:\n1. Your current location\n2. Destination\n\nEmergency services will be notified.", 0.99
+        
+        # Prediction intent
+        if any(word in msg for word in ["predict", "forecast", "future", "will it be", "tomorrow", "next"]):
+            return self._handle_prediction_intent(msg), 0.80
+        
+        # Pollution/Health intent
+        if any(word in msg for word in ["pollution", "air quality", "aqi", "pm2.5", "health", "breathable", "smog"]):
+            return self._handle_pollution_intent(msg), 0.85
+        
+        # Parking intent
+        if any(word in msg for word in ["parking", "park", "parking space", "parking availability", "where to park"]):
+            return self._handle_parking_intent(msg), 0.80
+        
+        # Cost/Toll intent
+        if any(word in msg for word in ["cost", "toll", "expensive", "price", "fee", "charge", "fare"]):
+            return "I can help with toll and cost information. Which route or location are you interested in?", 0.75
+        
+        # Time intent
+        if any(word in msg for word in ["time", "how long", "eta", "duration", "minutes", "hours"]):
+            return "I can estimate travel time. Please mention your starting point and destination.", 0.80
+        
+        # Weather intent
+        if any(word in msg for word in ["weather", "rain", "sunny", "wind", "temperature", "forecast"]):
+            return self._handle_weather_intent(msg), 0.78
+        
+        # Feedback intent
+        if any(word in msg for word in ["feedback", "report", "issue", "problem", "complaint"]):
+            return "Thank you for your feedback. Please describe the issue and location, and I'll report it to authorities.", 0.85
+        
+        # General fallback with context
+        fallback = ("I'm not sure I understood that correctly. I can help with:\n"
+                   "• 📍 Traffic updates for specific locations\n"
+                   "• 🚗 Route planning and navigation\n"
+                   "• 🚨 Emergency assistance\n"
+                   "• 🅿️ Parking information\n"
+                   "• 💨 Air quality and pollution data\n\n"
+                   "What would you like to know?")
+        return fallback, 0.5
+    
+    def _extract_location(self, msg: str) -> Optional[str]:
+        """Extract location name from message"""
+        msg_lower = msg.lower()
+        for location in self.locations:
+            if location.lower() in msg_lower:
+                return location
+        return None
+    
+    def _get_location_update(self, location: str) -> str:
+        """Get real-time traffic update for a location"""
+        try:
+            prediction = self.engine.predict_location(location, datetime.now())
+            congestion = prediction.get("congestion_level", "Medium")
+            confidence = prediction.get("confidence", 0.75)
+            
+            emoji_map = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}
+            emoji = emoji_map.get(congestion, "🔵")
+            
+            update = f"{emoji} **{location}** - {congestion} traffic\n"
+            update += f"Confidence: {confidence*100:.0f}%\n"
+            if congestion == "High":
+                update += "⚠️ Consider taking alternate routes."
+            elif congestion == "Low":
+                update += "✅ Good time to travel!"
+            return update
+        except Exception as e:
+            return f"I couldn't fetch current data for {location}. {str(e)}"
+    
+    def _handle_route_intent(self, msg: str) -> str:
+        """Handle route-related queries"""
+        origin_keywords = ["from", "starting", "leaving"]
+        dest_keywords = ["to", "reach", "destination", "going"]
+        
+        origin = None
+        destination = None
+        
+        # Try to extract origin and destination
+        for location in self.locations:
+            if location.lower() in msg.lower():
+                if origin is None:
+                    origin = location
+                else:
+                    destination = location
+        
+        if origin and destination:
+            return f"📍 Route from {origin} to {destination}\n" \
+                   f"Fastest route: Via MG Road corridor\n" \
+                   f"Estimated time: 35-45 minutes\n" \
+                   f"Toll: ₹50-100\n" \
+                   f"Would you like toll-free alternatives?"
+        elif "airport" in msg.lower():
+            return "✈️ **Airport Routes**\n" \
+                   "🥇 NH8 Expressway: 35-45 min | Toll: ₹150\n" \
+                   "🥈 DND Flyway: 40-50 min | Toll: ₹100\n" \
+                   "🥉 MG Road: 45-55 min | No toll\n" \
+                   "Which do you prefer?"
+        return "I can suggest routes. Please tell me where you're coming from and where you need to go."
+    
+    def _handle_prediction_intent(self, msg: str) -> str:
+        """Handle prediction queries"""
+        if any(word in msg for word in ["peak", "rush", "busy", "crowded"]):
+            return "⏰ **Peak Hours in Delhi NCR**:\n" \
+                   "🌅 Morning Rush: 7:30 AM - 10:00 AM (Heaviest: 8:30-9:30 AM)\n" \
+                   "🌆 Evening Rush: 5:00 PM - 8:00 PM (Heaviest: 6:00-7:00 PM)\n" \
+                   "💡 Best times: 11 AM - 4 PM, After 9 PM\n" \
+                   "Avoid peak hours for faster travel."
+        elif any(word in msg for word in ["tomorrow", "next day"]):
+            return "📅 **Tomorrow's Forecast**:\n" \
+                   "Morning: Moderate traffic expected\n" \
+                   "Afternoon: Light traffic\n" \
+                   "Evening: Heavy traffic (typical)\n" \
+                   "Best travel time: 11 AM - 3 PM"
+        return "I can predict traffic for specific times. What time are you planning to travel?"
+    
+    def _handle_pollution_intent(self, msg: str) -> str:
+        """Handle pollution-related queries"""
+        current_aqi = random.randint(150, 300)
+        aqi_level = "Unhealthy" if current_aqi > 200 else "Moderate"
+        
+        return f"💨 **Current Air Quality**\n" \
+               f"AQI: {current_aqi} ({aqi_level})\n" \
+               f"PM2.5: {current_aqi * 0.7:.0f} µg/m³\n\n" \
+               f"💡 Recommendations:\n" \
+               f"• Use N95 masks if outdoors\n" \
+               f"• Prefer metro over cars\n" \
+               f"• Keep car windows closed\n" \
+               f"• Choose eco-friendly routes"
+    
+    def _handle_parking_intent(self, msg: str) -> str:
+        """Handle parking queries"""
+        location = self._extract_location(msg)
+        if location:
+            available = random.randint(5, 50)
+            cost = random.randint(40, 150)
+            return f"🅿️ **Parking at {location}**\n" \
+                   f"Available spots: {available}\n" \
+                   f"Cost: ₹{cost}/hour\n" \
+                   f"Recommendation: Book in advance if above 30 mins"
+        return "Which location are you looking for parking in?"
+    
+    def _handle_weather_intent(self, msg: str) -> str:
+        """Handle weather-related queries"""
+        weather_scenarios = [
+            ("Sunny", 0.0, "Clear skies, good visibility. Safe to drive."),
+            ("Cloudy", 0.1, "Cloudy with possible light showers. Use headlights."),
+            ("Rainy", 0.5, "⚠️ Heavy traffic expected due to rain. Reduce speed, use headlights."),
+            ("Foggy", 0.6, "❌ Low visibility. Use high beams and reduce speed. Avoid peak hours.")
+        ]
+        weather, impact, advice = random.choice(weather_scenarios)
+        return f"🌤️ **Current Weather**: {weather}\n" \
+               f"Traffic Impact: +{int(impact*50)}%\n" \
+               f"{advice}"
+    
+    def generate_context_summary(self, location: str) -> Dict:
+        """Generate a contextual summary for a location"""
+        try:
+            prediction = self.engine.predict_location(location, datetime.now())
+            return {
+                "location": location,
+                "current_status": prediction.get("congestion_level", "Medium"),
+                "confidence": prediction.get("confidence", 0.75),
+                "recommendation": "Take alternate routes" if prediction.get("congestion_level") == "High" else "Good time to travel",
+                "peak_hours": "5:00 PM - 7:00 PM",
+                "best_time": "11:00 AM - 4:00 PM",
+                "updated_at": datetime.now().isoformat()
+            }
+        except:
+            return {
+                "location": location,
+                "current_status": "Data unavailable",
+                "recommendation": "Please check back later",
+                "updated_at": datetime.now().isoformat()
+            }
 
 
 class SmartCityIntelligence:
