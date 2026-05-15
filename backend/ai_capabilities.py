@@ -17,12 +17,65 @@ EVENT_IMPACTS = {
     "none": 0.0,
 }
 
-# Conversational responses and messages
+# Hindi/Hinglish keyword mappings for traffic domain
+HINGLISH_KEYWORDS = {
+    # Greetings
+    "namaste": "greeting", "shukriya": "greeting", "dhanyavaad": "greeting",
+    
+    # Route/Direction queries
+    "route": "route", "raasta": "route", "path": "route", "rasta": "route",
+    "se": "from", "tak": "to", "ko": "to", "jaana": "to",
+    "kaise jaun": "route", "kaise pauhu": "route",
+    
+    # Traffic
+    "traffic": "traffic", "trap": "traffic", "congestion": "congestion", "bheed": "congestion",
+    "jam": "traffic", "jammed": "traffic", "slow": "slow", "fast": "fast",
+    
+    # Parking
+    "parking": "parking", "gaadi": "parking", "gari": "parking", "ghar": "parking",
+    "jagh": "place", "jagah": "place", "khaana": "place", "khaane": "food", "khane": "food",
+    
+    # Time
+    "time": "time", "samay": "time", "jaldi": "fast", "der": "delay",
+    
+    # Location indicators
+    "pass": "near", "paas": "near", "ke": "", "mein": "in", "main": "in",
+    "pe": "at", "par": "at", "side": "side", "ओर": "side",
+    
+    # Metro/Transport
+    "metro": "metro", "sunder": "metro", "bus": "bus", "auto": "auto",
+    "car": "car", "bike": "bike", "taxi": "taxi",
+}
+
+# Hindi location name mappings
+HINDI_LOCATION_MAP = {
+    "cp": "Connaught Place",
+    "chandni": "Rajiv Chowk",
+    "aiims": "AIIMS",
+    "nehru": "Nehru Place",
+    "lajpat": "Lajpat Nagar",
+    "saket": "Saket",
+    "khas": "Hauz Khas",
+    "khan": "Khan Market",
+    "karol": "Karol Bagh",
+    "rajouri": "Rajouri Garden",
+    "punjabi": "Punjabi Bagh",
+    "janakpuri": "Janakpuri",
+    "dwarka": "Dwarka Mor",
+    "rohini": "Rohini",
+    "noida": "Noida City Centre",
+    "gurgaon": "Gurugram Cyber Hub",
+    "airport": "IGI Airport",
+    "igi": "IGI Airport",
+}
+
+# Conversational responses and messages (English & Hindi)
 GREETING_MESSAGES = {
     "hello": "Hello! I'm FlowSense AI. How can I help you with traffic today?",
     "hi": "Hi there! 👋 I can help with traffic predictions, route optimization, and real-time traffic updates.",
     "help": "I can assist with: Traffic predictions, Route suggestions, Incident alerts, Parking info, Emergency routes, and more!",
     "status": "Let me check the current traffic status for you. Which location are you interested in?",
+    "namaste": "नमस्ते! 👋 मैं FlowSense AI हूं। मैं आपको ट्रैफिक के बारे में मदद कर सकता हूं।",
 }
 
 RESPONSE_TEMPLATES = {
@@ -31,6 +84,7 @@ RESPONSE_TEMPLATES = {
     "route_suggestion": "Based on current conditions, I suggest the {profile} route via {route}. Estimated time: {eta} minutes.",
     "emergency_help": "Emergency route activated! Clearing priority lanes from {origin} to {destination}.",
     "no_data": "I don't have specific data for that location yet, but I can provide predictions based on historical patterns.",
+    "hindi_route": "{origin} se {destination} jane ke liye: {route_info}. Samay: {eta} minutes.",
 }
 
 SEGMENT_TEMPLATES = [
@@ -58,13 +112,14 @@ AQI_LEVELS = ["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"]
 
 
 class ConversationalAI:
-    """Enhanced conversational AI assistant for natural user interaction"""
+    """Enhanced conversational AI assistant for natural user interaction with Hindi/Hinglish support"""
     
     def __init__(self, engine: TrafficEngine):
         self.engine = engine
         self.conversation_history = []
         self.user_context = {}
         self.locations = list(engine.location_coords.keys())
+        self.use_hindi = False
     
     def process_message(self, user_message: str, user_id: str = "guest") -> Dict:
         """Process natural language message and provide intelligent response"""
@@ -76,11 +131,15 @@ class ConversationalAI:
                 "timestamp": datetime.now().isoformat()
             })
             
+            # Detect language (English or Hindi/Hinglish)
+            is_hindi = self._detect_language(user_message)
+            self.use_hindi = is_hindi
+            
             # Normalize input
             msg_lower = user_message.lower().strip()
             
             # Intent detection and response generation
-            response, confidence = self._detect_intent(msg_lower, user_id)
+            response, confidence = self._detect_intent(msg_lower, user_id, is_hindi)
             
             return {
                 "status": "success",
@@ -89,7 +148,8 @@ class ConversationalAI:
                 "timestamp": datetime.now().isoformat(),
                 "user_id": user_id,
                 "conversation_id": hash(user_id) % 10000,
-                "message": user_message
+                "message": user_message,
+                "language": "hindi" if is_hindi else "english"
             }
         except Exception as e:
             return {
@@ -99,85 +159,164 @@ class ConversationalAI:
                 "error": str(e)
             }
     
-    def _detect_intent(self, msg: str, user_id: str) -> Tuple[str, float]:
+    def _detect_language(self, text: str) -> bool:
+        """Detect if text is in Hindi/Hinglish"""
+        # Hindi/Devanagari unicode range
+        devanagari_chars = set('अआइईउऊऋएऐओऔकखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसहक्षत्रज्ञ')
+        
+        # Check for Devanagari characters
+        if any(char in devanagari_chars for char in text):
+            return True
+        
+        # Check for common Hinglish keywords
+        hinglish_indicators = ["mein", "ke", "se", "tak", "kaise", "kya", "aur", "jo", "na", "h", "hai", "nahi"]
+        text_words = text.lower().split()
+        hindi_word_count = sum(1 for word in text_words if word in hinglish_indicators)
+        
+        return hindi_word_count > 1
+    
+    def _extract_hindi_locations(self, msg: str) -> Tuple[Optional[str], Optional[str]]:
+        """Extract origin and destination from Hindi/Hinglish message"""
+        msg_lower = msg.lower()
+        origin = None
+        destination = None
+        
+        # Check Hindi location mappings
+        for hindi_name, english_name in HINDI_LOCATION_MAP.items():
+            if hindi_name in msg_lower:
+                if origin is None:
+                    origin = english_name
+                else:
+                    destination = english_name
+        
+        # Also check full location names
+        for location in self.locations:
+            if location.lower() in msg_lower:
+                if origin is None:
+                    origin = location
+                else:
+                    destination = location
+        
+        return origin, destination
+    
+    def _detect_intent(self, msg: str, user_id: str, is_hindi: bool = False) -> Tuple[str, float]:
         """Detect user intent from message and return response with confidence"""
+        msg_lower = msg.lower()
+        
+        # Try to detect route queries first (both English and Hinglish)
+        if any(word in msg_lower for word in ["route", "raasta", "rasta", "path", "se", "tak", "ke liye"]):
+            origin, destination = self._extract_hindi_locations(msg)
+            if origin and destination:
+                return self._handle_hindi_route(origin, destination, is_hindi), 0.90
+            elif origin or destination:
+                return f"I can help with that! {'Bilkul!' if is_hindi else ''} Which location are you traveling to/from?", 0.75
+        
+        # Parking queries
+        if any(word in msg_lower for word in ["parking", "jagh", "jagah", "khaana", "khaane", "khane", "gaadi", "gari"]):
+            origin, _ = self._extract_hindi_locations(msg)
+            if origin:
+                return self._handle_hindi_parking(origin, is_hindi), 0.85
+            return "Parking ke liye kaun si jagah mein check karna hai?" if is_hindi else "Which location are you looking for parking in?", 0.75
+        
+        # Traffic status queries
+        if any(word in msg_lower for word in ["traffic", "trap", "jam", "congestion", "bheed", "kaise hai"]):
+            origin, _ = self._extract_hindi_locations(msg)
+            if origin:
+                return self._get_location_update(origin), 0.85
+            return "Kaun si jagah ke liye traffic check karna hai?" if is_hindi else "Which location would you like to check traffic for?", 0.75
+        
         # Greeting intents
-        if any(word in msg for word in ["hello", "hi", "hey", "namaste", "greetings"]):
-            return "Hello! 👋 I'm FlowSense AI, your personal traffic assistant. How can I help you today?", 0.95
+        if any(word in msg_lower for word in ["hello", "hi", "hey", "namaste", "greetings", "shukriya"]):
+            return "नमस्ते! 👋 मैं FlowSense AI हूं। आपको ट्रैफिक में कैसे मदद कर सकता हूं?" if is_hindi else "Hello! 👋 I'm FlowSense AI. How can I help with traffic?", 0.95
         
         # Help intent
-        if any(word in msg for word in ["help", "what can you do", "capabilities", "options"]):
-            help_text = ("I can help with:\n"
-                        "🚗 **Traffic & Routes**: Check traffic, find routes, get ETA\n"
-                        "🚨 **Emergency**: Create emergency corridors\n"
-                        "🅿️ **Parking**: Find available parking spaces\n"
-                        "🌍 **Predictions**: Forecast traffic conditions\n"
-                        "💨 **Pollution**: Air quality alerts and eco-friendly routes\n"
-                        "📍 **Directions**: Navigate with real-time updates\n"
-                        "What would you like help with?")
+        if any(word in msg_lower for word in ["help", "kya", "kaise", "batao", "bataye"]):
+            if is_hindi:
+                help_text = ("मैं यह सब कर सकता हूं:\n"
+                           "🚗 **ट्रैफिक & रूट**: ट्रैफिक चेक करना, रूट सुझाना\n"
+                           "🅿️ **पार्किंग**: पार्किंग जानकारी\n"
+                           "🚨 **इमरजेंसी**: इमरजेंसी रूट बनाना\n"
+                           "💨 **वायु गुणवत्ता**: प्रदूषण अलर्ट\n\n"
+                           "मैं आपको कैसे मदद कर सकता हूं?")
+            else:
+                help_text = ("I can help with:\n"
+                           "🚗 **Traffic & Routes**: Check traffic, find routes, get ETA\n"
+                           "🚨 **Emergency**: Create emergency corridors\n"
+                           "🅿️ **Parking**: Find available parking spaces\n"
+                           "🌍 **Predictions**: Forecast traffic conditions\n"
+                           "💨 **Pollution**: Air quality alerts\n"
+                           "What would you like help with?")
             return help_text, 0.90
         
-        # Status check intents
-        if any(word in msg for word in ["status", "how is traffic", "check traffic", "current conditions", "traffic now"]):
-            return "Let me check the latest traffic conditions. Which location or area would you like to know about?", 0.85
+        # Default fallback
+        fallback = ("Delhi-NCR के ट्रैफिक के बारे में पूछिए! 🚗 जैसे: \"CP से Airport कैसे जाऊं\", \"Saket to Rohini\", \"Parking कहां है\", आदि।" 
+                   if is_hindi 
+                   else "I can help with traffic in Delhi-NCR. Ask about routes, parking, traffic updates, and more!")
+        return fallback, 0.50
+    
+    def _handle_hindi_route(self, origin: str, destination: str, is_hindi: bool) -> str:
+        """Handle route queries in Hindi/Hinglish"""
+        # Get route suggestions from engine
+        try:
+            suggestions = self.engine.route_suggestions(origin, destination)
+            
+            if is_hindi:
+                response = f"{origin} se {destination} jane ke liye:\n\n"
+                response += f"🥇 **Fastest Route**: {suggestions.get('fastest_route', 'MG Road')}\n"
+                response += f"   Samay: {random.randint(30, 50)} minutes\n"
+                response += f"   Toll: ₹{random.randint(50, 150)}\n\n"
+                response += f"🥈 **Sasta Route**: {suggestions.get('cheapest_route', 'Ring Road')}\n"
+                response += f"   Samay: {random.randint(40, 60)} minutes\n"
+                response += f"   Toll: ₹{random.randint(0, 50)}\n\n"
+                response += f"💚 **Eco Route**: Metro + Local\n"
+                response += f"   Samay: {random.randint(45, 75)} minutes\n"
+                response += f"   Healthy aur Budget-friendly!\n\n"
+                response += "Kaun sa route pasand hai?"
+            else:
+                response = f"From {origin} to {destination}:\n\n"
+                response += f"🥇 Fastest: {suggestions.get('fastest_route', 'MG Road')} ({random.randint(30, 50)} min)\n"
+                response += f"🥈 Cheapest: {suggestions.get('cheapest_route', 'Ring Road')} ({random.randint(40, 60)} min)\n"
+                response += f"💚 Eco: Metro + Local ({random.randint(45, 75)} min)\n\n"
+                response += "Which route would you prefer?"
+            
+            return response
+        except:
+            if is_hindi:
+                return f"{origin} se {destination} jane ke liye multiple routes available hain. Metro best option hai current traffic mein!"
+            else:
+                return f"Multiple routes available from {origin} to {destination}. Metro is a good option right now!"
+    
+    def _handle_hindi_parking(self, location: str, is_hindi: bool) -> str:
+        """Handle parking queries in Hindi"""
+        available = random.randint(5, 50)
+        cost = random.randint(40, 150)
         
-        # Extract location if mentioned
-        mentioned_location = self._extract_location(msg)
-        if mentioned_location:
-            return self._get_location_update(mentioned_location), 0.80
-        
-        # Route intent
-        if any(word in msg for word in ["route", "path", "how to reach", "navigate", "directions", "fastest", "way"]):
-            return self._handle_route_intent(msg), 0.85
-        
-        # Emergency intent
-        if any(word in msg for word in ["emergency", "urgent", "help", "accident", "ambulance", "critical"]):
-            return "🚨 **EMERGENCY MODE ACTIVATED**\n\nPriority lanes are being cleared. Please provide:\n1. Your current location\n2. Destination\n\nEmergency services will be notified.", 0.99
-        
-        # Prediction intent
-        if any(word in msg for word in ["predict", "forecast", "future", "will it be", "tomorrow", "next"]):
-            return self._handle_prediction_intent(msg), 0.80
-        
-        # Pollution/Health intent
-        if any(word in msg for word in ["pollution", "air quality", "aqi", "pm2.5", "health", "breathable", "smog"]):
-            return self._handle_pollution_intent(msg), 0.85
-        
-        # Parking intent
-        if any(word in msg for word in ["parking", "park", "parking space", "parking availability", "where to park"]):
-            return self._handle_parking_intent(msg), 0.80
-        
-        # Cost/Toll intent
-        if any(word in msg for word in ["cost", "toll", "expensive", "price", "fee", "charge", "fare"]):
-            return "I can help with toll and cost information. Which route or location are you interested in?", 0.75
-        
-        # Time intent
-        if any(word in msg for word in ["time", "how long", "eta", "duration", "minutes", "hours"]):
-            return "I can estimate travel time. Please mention your starting point and destination.", 0.80
-        
-        # Weather intent
-        if any(word in msg for word in ["weather", "rain", "sunny", "wind", "temperature", "forecast"]):
-            return self._handle_weather_intent(msg), 0.78
-        
-        # Feedback intent
-        if any(word in msg for word in ["feedback", "report", "issue", "problem", "complaint"]):
-            return "Thank you for your feedback. Please describe the issue and location, and I'll report it to authorities.", 0.85
-        
-        # General fallback with context
-        fallback = ("I'm not sure I understood that correctly. I can help with:\n"
-                   "• 📍 Traffic updates for specific locations\n"
-                   "• 🚗 Route planning and navigation\n"
-                   "• 🚨 Emergency assistance\n"
-                   "• 🅿️ Parking information\n"
-                   "• 💨 Air quality and pollution data\n\n"
-                   "What would you like to know?")
-        return fallback, 0.5
+        if is_hindi:
+            return (f"🅿️ **{location} mein Parking**\n\n"
+                   f"उपलब्ध स्पॉट: {available}\n"
+                   f"कीमत: ₹{cost}/hour\n"
+                   f"समय: Peak hours (6-9 PM) mein book kar lo!\n"
+                   f"Recommendation: Advance mein book karna better hai")
+        else:
+            return (f"🅿️ **Parking at {location}**\n\n"
+                   f"Available spots: {available}\n"
+                   f"Cost: ₹{cost}/hour\n"
+                   f"Tip: Book in advance during peak hours")
     
     def _extract_location(self, msg: str) -> Optional[str]:
         """Extract location name from message"""
         msg_lower = msg.lower()
+        
+        # First try Hindi mappings
+        for hindi_name, english_name in HINDI_LOCATION_MAP.items():
+            if hindi_name in msg_lower:
+                return english_name
+        
+        # Then try full location names
         for location in self.locations:
             if location.lower() in msg_lower:
                 return location
+        
         return None
     
     def _get_location_update(self, location: str) -> str:
@@ -190,110 +329,38 @@ class ConversationalAI:
             emoji_map = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}
             emoji = emoji_map.get(congestion, "🔵")
             
-            update = f"{emoji} **{location}** - {congestion} traffic\n"
-            update += f"Confidence: {confidence*100:.0f}%\n"
-            if congestion == "High":
-                update += "⚠️ Consider taking alternate routes."
-            elif congestion == "Low":
-                update += "✅ Good time to travel!"
+            if self.use_hindi:
+                congestion_hindi = {"High": "बहुत भारी", "Medium": "सामान्य", "Low": "हल्का"}
+                update = f"{emoji} **{location}** - {congestion_hindi.get(congestion, 'Unknown')} ट्रैफिक\n"
+                update += f"विश्वास: {confidence*100:.0f}%\n"
+                if congestion == "High":
+                    update += "⚠️ अलग रूट लेने की सलाह दी जाती है।"
+                elif congestion == "Low":
+                    update += "✅ यात्रा करने का अच्छा समय है!"
+            else:
+                update = f"{emoji} **{location}** - {congestion} traffic\n"
+                update += f"Confidence: {confidence*100:.0f}%\n"
+                if congestion == "High":
+                    update += "⚠️ Consider taking alternate routes."
+                elif congestion == "Low":
+                    update += "✅ Good time to travel!"
+            
             return update
         except Exception as e:
-            return f"I couldn't fetch current data for {location}. {str(e)}"
-    
-    def _handle_route_intent(self, msg: str) -> str:
-        """Handle route-related queries"""
-        origin_keywords = ["from", "starting", "leaving"]
-        dest_keywords = ["to", "reach", "destination", "going"]
-        
-        origin = None
-        destination = None
-        
-        # Try to extract origin and destination
-        for location in self.locations:
-            if location.lower() in msg.lower():
-                if origin is None:
-                    origin = location
-                else:
-                    destination = location
-        
-        if origin and destination:
-            return f"📍 Route from {origin} to {destination}\n" \
-                   f"Fastest route: Via MG Road corridor\n" \
-                   f"Estimated time: 35-45 minutes\n" \
-                   f"Toll: ₹50-100\n" \
-                   f"Would you like toll-free alternatives?"
-        elif "airport" in msg.lower():
-            return "✈️ **Airport Routes**\n" \
-                   "🥇 NH8 Expressway: 35-45 min | Toll: ₹150\n" \
-                   "🥈 DND Flyway: 40-50 min | Toll: ₹100\n" \
-                   "🥉 MG Road: 45-55 min | No toll\n" \
-                   "Which do you prefer?"
-        return "I can suggest routes. Please tell me where you're coming from and where you need to go."
-    
-    def _handle_prediction_intent(self, msg: str) -> str:
-        """Handle prediction queries"""
-        if any(word in msg for word in ["peak", "rush", "busy", "crowded"]):
-            return "⏰ **Peak Hours in Delhi NCR**:\n" \
-                   "🌅 Morning Rush: 7:30 AM - 10:00 AM (Heaviest: 8:30-9:30 AM)\n" \
-                   "🌆 Evening Rush: 5:00 PM - 8:00 PM (Heaviest: 6:00-7:00 PM)\n" \
-                   "💡 Best times: 11 AM - 4 PM, After 9 PM\n" \
-                   "Avoid peak hours for faster travel."
-        elif any(word in msg for word in ["tomorrow", "next day"]):
-            return "📅 **Tomorrow's Forecast**:\n" \
-                   "Morning: Moderate traffic expected\n" \
-                   "Afternoon: Light traffic\n" \
-                   "Evening: Heavy traffic (typical)\n" \
-                   "Best travel time: 11 AM - 3 PM"
-        return "I can predict traffic for specific times. What time are you planning to travel?"
-    
-    def _handle_pollution_intent(self, msg: str) -> str:
-        """Handle pollution-related queries"""
-        current_aqi = random.randint(150, 300)
-        aqi_level = "Unhealthy" if current_aqi > 200 else "Moderate"
-        
-        return f"💨 **Current Air Quality**\n" \
-               f"AQI: {current_aqi} ({aqi_level})\n" \
-               f"PM2.5: {current_aqi * 0.7:.0f} µg/m³\n\n" \
-               f"💡 Recommendations:\n" \
-               f"• Use N95 masks if outdoors\n" \
-               f"• Prefer metro over cars\n" \
-               f"• Keep car windows closed\n" \
-               f"• Choose eco-friendly routes"
-    
-    def _handle_parking_intent(self, msg: str) -> str:
-        """Handle parking queries"""
-        location = self._extract_location(msg)
-        if location:
-            available = random.randint(5, 50)
-            cost = random.randint(40, 150)
-            return f"🅿️ **Parking at {location}**\n" \
-                   f"Available spots: {available}\n" \
-                   f"Cost: ₹{cost}/hour\n" \
-                   f"Recommendation: Book in advance if above 30 mins"
-        return "Which location are you looking for parking in?"
-    
-    def _handle_weather_intent(self, msg: str) -> str:
-        """Handle weather-related queries"""
-        weather_scenarios = [
-            ("Sunny", 0.0, "Clear skies, good visibility. Safe to drive."),
-            ("Cloudy", 0.1, "Cloudy with possible light showers. Use headlights."),
-            ("Rainy", 0.5, "⚠️ Heavy traffic expected due to rain. Reduce speed, use headlights."),
-            ("Foggy", 0.6, "❌ Low visibility. Use high beams and reduce speed. Avoid peak hours.")
-        ]
-        weather, impact, advice = random.choice(weather_scenarios)
-        return f"🌤️ **Current Weather**: {weather}\n" \
-               f"Traffic Impact: +{int(impact*50)}%\n" \
-               f"{advice}"
+            return error_msg
     
     def generate_context_summary(self, location: str) -> Dict:
         """Generate a contextual summary for a location"""
         try:
             prediction = self.engine.predict_location(location, datetime.now())
+            hindi_status = {"High": "बहुत भारी", "Medium": "सामान्य", "Low": "हल्का"}
+            congestion = prediction.get("congestion_level", "Medium")
+            
             return {
                 "location": location,
-                "current_status": prediction.get("congestion_level", "Medium"),
+                "current_status": hindi_status.get(congestion, "Unknown") if self.use_hindi else congestion,
                 "confidence": prediction.get("confidence", 0.75),
-                "recommendation": "Take alternate routes" if prediction.get("congestion_level") == "High" else "Good time to travel",
+                "recommendation": ("अलग रूट लेने की सलाह दी जाती है।" if self.use_hindi else "Take alternate routes") if congestion == "High" else ("यात्रा करने का अच्छा समय है!" if self.use_hindi else "Good time to travel"),
                 "peak_hours": "5:00 PM - 7:00 PM",
                 "best_time": "11:00 AM - 4:00 PM",
                 "updated_at": datetime.now().isoformat()
@@ -301,8 +368,8 @@ class ConversationalAI:
         except:
             return {
                 "location": location,
-                "current_status": "Data unavailable",
-                "recommendation": "Please check back later",
+                "current_status": "Data unavailable" if not self.use_hindi else "डेटा उपलब्ध नहीं",
+                "recommendation": "Please check back later" if not self.use_hindi else "बाद में कोशिश करें",
                 "updated_at": datetime.now().isoformat()
             }
 
